@@ -51,11 +51,7 @@ function envinit {
     [ "Z${PATCHEXEC}" = "Z" ] && echo "patch utility (${PATCHEXEC}) not available - abort install" && exit 2
 
     if [ "$OS_TYPE" = "Linux" ] ; then
-	if [ -d /usr/java ] ; then
-	    export JAVA_SEARCH=/usr/java
-	else
-	    export JAVA_SEARCH=/usr/lib
-	fi
+	export JAVA_SEARCH=/usr/lib
 	export PG_SEARCH=/usr
     else
 	export JAVA_SEARCH=/Library/Java/JavaVirtualMachines
@@ -74,8 +70,6 @@ function installjava {
     # For Linux - if Java not installed, try to install
     if [ -z ${JRE_HOME+x} ] ; then
         if [ "${OS_TYPE}" = "Linux" ] ; then
-	    read -p "Version of Pega prior to 7.2 require manual installation of a JDK from Oracle. Enter the value N to abort and install the JVM manually, or any other  key to continue: " JVM_MAN_INSTALL
-	    [ "Z${JVM_MAN_INSTALL}" = "ZN" ] && exit 6
 	    installlinux java-1.8.0-openjdk
 	    installlinux java-1.8.0-openjdk-devel
 	    for j in `find ${JAVA_SEARCH} -name javac | xargs -I foo dirname foo | xargs -I foo dirname foo` ; do
@@ -160,7 +154,6 @@ function preppostgresql {
 	fi
 	# Allow any user to write to postgresql run directory for pid files
 	echo "Allow all access to /var/run/postgresql for any user"
-	[ ! -d /var/run/postgresql ] && sudo mkdir /var/run/postgresql
 	[ -d /var/run/postgresql ] && sudo chmod 777 /var/run/postgresql
     else
         # Assume this is MacOSX / Darwin
@@ -229,7 +222,7 @@ done
 shift $((OPTIND-1))
 
 if [ "${IS_INTERACTIVE}" == "true" ] ; then 
-    read -p "Enter pega runtime user uid: " PE_UID
+    read -s -p "Enter pega runtime user uid: " PE_UID
 else
     echo "Effective runtime user will be $PE_UID"
     sleep 3
@@ -267,17 +260,14 @@ jar xvf PRPC_PE.jar build.xml antinstall-config.xml
 ${MVEXEC} build.xml build-nitro.xml 
 ${MVEXEC} antinstall-config.xml antinstall-config-nitro.xml
 
+jar uvf PRPC_PE.jar build-nitro.xml antinstall-config-nitro.xml installPLJavaExtension.sql
+
 export INSTALL_MODE=text
 if [ -z ${DISPLAY+x} ] ; then
     sed -e 's/.*portavailabilitybutton.*//g' -i.gui antinstall-config-nitro.xml
+    jar uvf PRPC_PE.jar antinstall-config-nitro.xml
 else
     unset INSTALL_MODE
-fi
-
-jar uvf PRPC_PE.jar build-nitro.xml antinstall-config-nitro.xml installPLJavaExtension.sql
-if [ $? -gt 1 ] ; then
-    echo "Failed to add antinstall-config-nitro.xml and build-nitro.xml to PRPC_PE.jar - manual rebuild of jar required to include the nitro configuration"
-    exit 5
 fi
 
 # Switch user if specified . Exit if root user - non-root user required to run and configure database. 
@@ -288,7 +278,7 @@ if [ "$PE_UID" = "root" ] ; then
 else
     getent passwd $PE_UID > /dev/null 2>&1
     if [ $? -gt 0 ] ; then
-	read -p "Specified user ${PE_UID} does not exist. Create user (Y/N) ?" NEW_USER
+	read -s -p "Specified user ${PE_UID} does not exist. Create user (Y/N) ?" NEW_USER
 	if [ "${NEW_USER}" = "Y" ] ; then
 	    useradd --system -N -m -d /usr/local/PegaPE -s /sbin/nologin -G postgres ${PE_UID}
 	    if [ $? -gt 0 ] ; then
@@ -307,9 +297,9 @@ fi
 chown -R $PE_UID /usr/local/PegaPE .
 
 if [ "$PE_UID" = "$USER" ] ; then
-    "${JAVA_HOME}/bin/java" -Xms512M -Xmx1024M -jar PRPC_PE.jar ${INSTALL_MODE} -type nitro
+    "${JAVA_HOME}/bin/java" -Xms128M -Xmx512M -jar PRPC_PE.jar ${INSTALL_MODE} -type nitro
 else
-    sudo -u $PE_UID --preserve-env=JAVA_HOME,PG_DATA,INSTALL_MODE,NUMBER_OF_PROCESSORS,PATH "${JAVA_HOME}/bin/java" -Xms512M -Xmx1024M -jar PRPC_PE.jar ${INSTALL_MODE} -type nitro
+    sudo -u $PE_UID --preserve-env=JAVA_HOME,PG_DATA,INSTALL_MODE,NUMBER_OF_PROCESSORS,PATH "${JAVA_HOME}/bin/java" -Xms128M -Xmx512M -jar PRPC_PE.jar ${INSTALL_MODE} -type nitro
 fi
 
 rm -rf /usr/local/PegaPE/PRPCPersonalEdition/pgsql /usr/local/PegaPE/PRPCPersonalEdition/jre*
@@ -322,7 +312,7 @@ exit 0
 
 ### installPLJavaExtension.sql
 CREATE EXTENSION pljava;
-GRANT USAGE ON LANGUAGE java TO pega;
+GRANT USAGE ON LANGUAGE java TO postgres;
 ### installPLJavaExtension.sql
 
 ### pg_env.sh
@@ -358,10 +348,6 @@ export CURRDIR=`dirname $0`
 
 # Start tomcat - continue after success - needs log line after "startup completed"
 export CATALINA_HOME=/usr/local/PegaPE/PRPCPersonalEdition/tomcat
-# Ensure DB connection schema is correct
-sed -e 's/\(jdbc:postgresql:\/\/localhost:[0-9]*\/\)\(.*\)\"/\1'${PGDATABASE}'\"/g' -i.bk ${CATALINA_HOME}/conf/context.xml
-echo "JRE_HOME=${JAVA_HOME}" > ${CATALINA_HOME}/bin/setenv.sh
-echo "JAVA_OPTS=-Xms1024m -Xmx4096m -XX:PermSize=64m -XX:MaxPermSize=384m
 sh "${CATALINA_HOME}/bin/startup.sh"
 #( tail -f -n0 ${CATALINA_HOME}/logs/PegaRULES.log & ) | grep -q "startup completed"
 
@@ -378,8 +364,8 @@ echo "Ready for empathetic digital transformation !!!"
 # # diff -u build.xml build-nitro.xml > nitro.patch
 # # diff -u antinstall-config.xml antinstall-config-nitro.xml >> nitro.patch
 ### nitro.patch
---- build.xml	2015-06-04 07:33:12.000000000 -0400
-+++ build-nitro.xml	2019-11-29 17:18:45.273124490 -0500
+--- build.xml	2019-11-26 18:13:37.294074070 -0500
++++ build-nitro.xml	2019-11-27 16:58:37.701802624 -0500
 @@ -2,7 +2,7 @@
  <project name="Installation Build"  default="Install"  xmlns:pega="pega:/pega.com">
  
@@ -389,10 +375,11 @@ echo "Ready for empathetic digital transformation !!!"
  
  	<!-- provides access to environmental variables -->
  	<property environment="env"/>
-@@ -10,19 +10,71 @@
+@@ -10,13 +10,63 @@
  	<!-- sets the version of PRPC this Personal Edition is built on -->
- 	<property name="prpc.version" value="718" />
+ 	<property name="prpc.version" value="7.2.2" />
  	
+-	<!-- initialize the postgres data directory -->
 +	<property name="db.name" value="postgres" />
 +	<condition property="postgres.install.dir" value="${install.path}${file.separator}pgsql">
 +	    <os family="windows"/>
@@ -428,7 +415,7 @@ echo "Ready for empathetic digital transformation !!!"
 +	<macrodef name="INSTALLDB">
 +		<attribute name="binDir" default="${postgres.install.dir}${file.separator}bin"/>
 +		<attribute name="dataDir" default="${postgres.data.dir}"/>
-+		<attribute name="superUser" default="pega"/>
++		<attribute name="superUser" default="postgres"/>
 +		<sequential>
 +			<exec executable="@{binDir}${file.separator}initdb" >
 +				<arg value="-E"/>
@@ -443,29 +430,29 @@ echo "Ready for empathetic digital transformation !!!"
 +		</sequential>
 +	</macrodef>
 +
- 	<!-- initialize the postgres data directory -->
++ 	<!-- initialize the postgres data directory -->
  	<macrodef name="INITDB">
 -		<attribute name="binDir" default="${postgres.install.dir}\bin"/>
 -		<attribute name="dataDir" default="${postgres.install.dir}\data"/>
 +		<attribute name="binDir" default="${postgres.install.dir}${file.separator}bin"/>
 +		<attribute name="dataDir" default="${postgres.data.dir}"/>
- 		<attribute name="superUser" default="pega"/>
+ 		<attribute name="superUser" default="postgres"/>
  		<sequential>
 -			<exec executable="@{binDir}\initdb" >
 +			<exec executable="@{binDir}${file.separator}initdb" >
-+                                <arg value="-E"/>
-+                                <arg value="UTF-8"/>
+                                 <arg value="-E"/>
+                                 <arg value="UTF-8"/>
  				<arg value="-D"/>
- 				<arg value="@{dataDir}"/>
+@@ -24,7 +74,7 @@
  				<arg value="-U"/>
  				<arg value="@{superUser}"/>
  				<env key="PGPORT" value="${pe.db.port}"/>
--				<env key="Path" value="${install.path}/jre1.7.0_71/bin;${install.path}/jre1.7.0_71/bin/server;${env.Path}"/>
+-				<env key="Path" value="${install.path}/jre1.8.0_111/bin;${install.path}/jre1.8.0_111/bin/server;${env.Path}"/>
 +				<env key="Path" value="${env.JAVA_HOME}${file.separator}bin:${env.JAVA_HOME}${file.separator}bin${file.separator}server:${env.Path}"/>
  			</exec>
  		</sequential>
  	</macrodef>
-@@ -30,18 +82,20 @@
+@@ -32,18 +82,20 @@
  	<!-- Control the postgres server -->
  	<macrodef name="PGCTL">
  		<attribute name="command" default="start"/>
@@ -474,7 +461,7 @@ echo "Ready for empathetic digital transformation !!!"
 +		<attribute name="binDir" default="${postgres.install.dir}${file.separator}bin"/>
 +		<attribute name="dataDir" default="${postgres.data.dir}"/>
  		<sequential>
--			<exec executable="@{binDir}\pg_ctl" spawn="true">
+-			<exec executable="@{binDir}\pg_ctl" spawn="true" dir="${postgres.install.dir}">
 +			<exec executable="@{binDir}${file.separator}pg_ctl" dir="${postgres.install.dir}">
 +				<arg value="-w"/>
 +				<arg value="-s"/>
@@ -486,13 +473,13 @@ echo "Ready for empathetic digital transformation !!!"
  				<arg value="@{command}"/>
  				<env key="PGPORT" value="${pe.db.port}"/>
 -				<env key="CLASSPATH" value="${postgres.install.dir}/lib/pljava.jar"/>
--				<env key="Path" value="${install.path}/jre1.7.0_71/bin;${install.path}/jre1.7.0_71/bin/server;${env.Path}"/>
+-				<env key="Path" value="${install.path}/jre1.8.0_111/bin;${install.path}/jre1.8.0_111/bin/server;${env.Path}"/>
 +				<env key="CLASSPATH" value="${postgres.install.dir}${file.separator}share${file.separator}postgresql${file.separator}pljava-1.6.0-SNAPSHOT.jar"/>
 +				<env key="Path" value="${env.JAVA_HOME}${file.separator}bin:${env.JAVA_HOME}${file.separator}bin${file.separator}server:${env.Path}"/>
  			</exec>
  		</sequential>
  	</macrodef>
-@@ -50,29 +104,30 @@
+@@ -52,30 +104,30 @@
  	<macrodef name="PSQL">
  		<attribute name="command"/>
  		<attribute name="flag" default="-c"/>
@@ -503,11 +490,10 @@ echo "Ready for empathetic digital transformation !!!"
 +			<exec executable="@{binDir}${file.separator}psql" failonerror="true">
  					<arg value="@{flag}"/>
  					<arg value="@{command}"/>
--					<arg value="postgres"/>
-+					<arg value="${db.name}"/>
- 					<arg value="pega"/>
+ 					<arg value="postgres"/>
+ 					<arg value="postgres"/>
  					<env key="PGPORT" value="${pe.db.port}"/>
--					<env key="Path" value="${install.path}/jre1.7.0_71/bin;${install.path}/jre1.7.0_71/bin/server;${env.Path}"/>
+-					<env key="Path" value="${install.path}/jre1.8.0_111/bin;${install.path}/jre1.8.0_111/bin/server;${env.Path}"/>
 +					<env key="Path" value="${env.JAVA_HOME}${file.separator}bin:${env.JAVA_HOME}${file.separator}bin${file.separator}server:${env.Path}"/>
  			</exec>
  		</sequential>
@@ -517,40 +503,43 @@ echo "Ready for empathetic digital transformation !!!"
  	<macrodef name="PGRESTORE">
 -			<attribute name="binDir" default="${postgres.install.dir}\bin"/>
 -			<attribute name="dataDir" default="${postgres.install.dir}\data"/>
--			<attribute name="databaseName" default="pega"/>
+-			<attribute name="databaseName" default="postgres"/>
 +			<attribute name="binDir" default="${postgres.install.dir}${file.separator}bin"/>
 +			<attribute name="dataDir" default="${postgres.data.dir}"/>
 +			<attribute name="databaseName" default="${db.name}"/>
- 			<attribute name="superUser" default="pega"/>
+ 			<attribute name="superUser" default="postgres"/>
  			<attribute name="processes" default="2"/>
 -			<attribute name="dumpfile" default="${user.dir}\data\pega.dump"/>
 +			<attribute name="dumpfile" default="${user.dir}${file.separator}data${file.separator}pega.dump"/>
-+                        <attribute name="failOnError" default="true" />
+                         <attribute name="failOnError" default="true" />
  			<sequential>
--				<exec executable="@{binDir}\pg_restore" failonerror="true">
+-				<exec executable="@{binDir}\pg_restore" failonerror="@{failOnError}">
 +				<exec executable="@{binDir}${file.separator}pg_restore" failonerror="@{failOnError}">
  					<arg value="-U"/>
  					<arg value="@{superUser}"/>
  					<arg value="-d"/>
-@@ -83,7 +138,7 @@
+@@ -86,7 +138,7 @@
  					<arg value="-v"/>
  					<arg value="@{dumpfile}"/>
  					<env key="PGPORT" value="${pe.db.port}"/>
--					<env key="Path" value="${install.path}/jre1.7.0_71/bin;${install.path}/jre1.7.0_71/bin/server;${env.Path}"/>
+-					<env key="Path" value="${install.path}/jre1.8.0_111/bin;${install.path}/jre1.8.0_111/bin/server;${env.Path}"/>
 +					<env key="Path" value="${env.JAVA_HOME}${file.separator}bin:${env.JAVA_HOME}${file.separator}bin${file.separator}server:${env.Path}"/>
  				</exec>
  			</sequential>
  	</macrodef>
-@@ -92,7 +147,7 @@
+@@ -94,9 +146,9 @@
+ 	  
  	<!-- Custom Tasks -->
- 	<taskdef resource="com/pega/pegarules/util/anttasks/tasks.properties" uri="pega:/pega.com">
- 		<classpath>
--			<pathelement location="${basedir}/prdeploy.jar"/>
-+			<pathelement location="${basedir}${file.separator}prdeploy.jar"/>
- 		</classpath>
- 	</taskdef>
+ 	<taskdef name="isdbavailable" classname="com.pega.pegarules.util.anttasks.IsDBAvailable" uri="pega:/pega.com"
+-			classpath="${basedir}/prdeploy.jar" />
++			classpath="${basedir}${file.separator}prdeploy.jar" />
+ 	<taskdef name="browserlauncher" classname="com.pega.pegarules.util.anttasks.BrowserLauncher" uri="pega:/pega.com"
+-			classpath="${basedir}/prdeploy.jar" />
++			classpath="${basedir}${file.separator}prdeploy.jar" />
  
-@@ -104,7 +159,7 @@
+ 	<target name="Install" depends="Initialization, 
+ 									Database Server Installation, 
+@@ -106,7 +158,7 @@
  									PRPC Launching"/>
  
  	<target name="Initialization">
@@ -559,7 +548,7 @@ echo "Ready for empathetic digital transformation !!!"
  		<property environment="env"/>
  		<echo message="Beginning installation of PRPC ${prpc.version} Personal Edition -- this process should take about 5-10 minutes ..."/>
  		<tstamp>
-@@ -113,19 +168,19 @@
+@@ -115,19 +167,19 @@
  
  		<!-- create the installation directory and temporary directory -->
  		<mkdir dir="${install.path}" />
@@ -574,40 +563,31 @@ echo "Ready for empathetic digital transformation !!!"
 +		<replace summary="true" dir="${install.path}${file.separator}tomcat${file.separator}bin" token="@CATALINA_HOME" value="${install.path}${file.separator}tomcat" >
  			<include name="shutdown.bat"/>
  			<include name="startup.bat"/>
--		</replace>
--		<replace summary="true" file="${install.path}/tomcat/bin/setenv.bat" token="@JAVA_HOME" value="${install.path}\jre1.7.0_71" />
--		<replace summary="true" file="${install.path}/scripts/pg_env.bat" token="@JAVA_HOME" value="${install.path}\jre1.7.0_71" />
+ 		</replace>
+-		<replace summary="true" file="${install.path}/tomcat/bin/setenv.bat" token="@JAVA_HOME" value="${install.path}\jre1.8.0_111" />
+-		<replace summary="true" file="${install.path}/scripts/pg_env.bat" token="@JAVA_HOME" value="${install.path}\jre1.8.0_111" />
 -		<replace summary="true" file="${install.path}\tomcat\conf\context.xml" token="@TEMP_DIR" value="${install.path}\temp" />
-+		</replace>
 +		<replace summary="true" file="${install.path}${file.separator}tomcat${file.separator}bin${file.separator}setenv.bat" token="@JAVA_HOME" value="${env.JAVA_HOME}" />
 +		<replace summary="true" file="${install.path}${file.separator}scripts${file.separator}pg_env.bat" token="@JAVA_HOME" value="${env.JAVA_HOME}" />
 +		<replace summary="true" file="${install.path}${file.separator}tomcat${file.separator}conf${file.separator}context.xml" token="@TEMP_DIR" value="${install.path}${file.separator}temp" />
  		
  		<!-- Number of processors will determine the number of processes to use in restoring data to the database -->
  		<property name="num.processors" value="${env.NUMBER_OF_PROCESSORS}"/>
-@@ -136,21 +191,45 @@
+@@ -138,19 +190,34 @@
  	<target name="Database Server Installation">
  		
  		<!-- set the directory postgres is installed to -->
 -		<property name="postgres.install.dir" value="${install.path}/pgsql" />
-+		<condition property="postgres.install.dir" value="${file.separator}Library${file.separator}PostgreSQL${file.separator}9.4">
-+		  <os family="mac"/>
-+		</condition>
-+		<condition property="postgres.data.dir" value="${install.path}${file.separator}data">
-+		  <os family="unix"/>
-+		</condition>
-+		<condition property="postgres.install.dir" value="${install.path}${file.separator}pgsql">
-+		  <os family="windows"/>
-+		</condition>
++		<!-- <property name="postgres.install.dir" value="${file.separator}Library${file.separator}PostgreSQL${file.separator}9.4" /> -->
++		<property name="postgres.data.dir" value="${install.path}${file.separator}data" />
  				
  		<!-- initialize postgres data directory -->
--		<INITDB binDir="${postgres.install.dir}\bin" dataDir="${postgres.install.dir}\data" superUser="pega"/>
-+		<INITDB binDir="${postgres.install.dir}${file.separator}bin" dataDir="${postgres.data.dir}" superUser="pega"/>
-+
+-		<INITDB binDir="${postgres.install.dir}\bin" dataDir="${postgres.install.dir}\data" superUser="postgres"/>
++		<INITDB binDir="${postgres.install.dir}${file.separator}bin" dataDir="${postgres.data.dir}" superUser="postgres"/>
++		
 +		<!-- Set JVM location in configuration before starting DB -->
 +		<property name="libjvm.location.setting" value="pljava.libjvm_location = '${env.JAVA_HOME}${file.separator}${postgres.install.libjvmdir}'"/>
 +		
-+		<!--
 +		<loadresource property="libjvm.location.setting.cleaned">
 +			<propertyresource name="libjvm.location.setting"/>
 +			<filterchain>
@@ -616,8 +596,7 @@ echo "Ready for empathetic digital transformation !!!"
 +				</tokenfilter>
 +			</filterchain>
 +		</loadresource>
-+		-->
-+		<property name="libjvm.location.setting.cleaned" value="${libjvm.location.setting}"/>
++		
 +		<echo file="${postgres.data.dir}${file.separator}postgresql.conf" message="${libjvm.location.setting.cleaned}" append="true"/>
  		
  		<!-- start the postgres service -->
@@ -628,16 +607,16 @@ echo "Ready for empathetic digital transformation !!!"
  		<echo message="Waiting for Postgres to start..."/>
  		
  		<pega:isdbavailable 
--			driverpath="${install.path}\tomcat\lib\postgresql-9.2-1000.jdbc4.jar"
-+			driverpath="${install.path}${file.separator}tomcat${file.separator}lib${file.separator}postgresql-9.2-1000.jdbc4.jar"
+-			driverpath="${install.path}\tomcat\lib\postgresql-9.4-1201-jdbc41.jar"
++			driverpath="${install.path}${file.separator}tomcat${file.separator}lib${file.separator}postgresql-9.4-1201-jdbc41.jar"
  			driverclass="org.postgresql.Driver"
--			url="jdbc:postgresql://localhost:${pe.db.port}/postgres"
-+			url="jdbc:postgresql://localhost:${pe.db.port}/${db.name}"
- 			user="pega"
- 			pw="pega"
- 			query="select current_database()"
-@@ -160,22 +239,25 @@
- 				      
+ 			url="jdbc:postgresql://localhost:${pe.db.port}/postgres"
+ 			user="postgres"
+@@ -159,25 +226,27 @@
+ 			maxwait="15"/>
+ 				            
+ 		<echo>Connected to Database.</echo>       
+-				      
  		
  		<!-- create database and user -->
 -		<PSQL binDir="${postgres.install.dir}\bin" flag="-f" command="${install.path}\scripts\SetupDBandUser.sql"/>
@@ -658,26 +637,32 @@ echo "Ready for empathetic digital transformation !!!"
  		<echo message="Waiting for Postgres to restart..."/>
  		
  		<pega:isdbavailable 
--			driverpath="${install.path}\tomcat\lib\postgresql-9.2-1000.jdbc4.jar"
-+			driverpath="${install.path}${file.separator}tomcat${file.separator}lib${file.separator}postgresql-9.2-1000.jdbc4.jar"
+-			driverpath="${install.path}\tomcat\lib\postgresql-9.4-1201-jdbc41.jar"
++			driverpath="${install.path}${file.separator}tomcat${file.separator}lib${file.separator}postgresql-9.4-1201-jdbc41.jar"
  			driverclass="org.postgresql.Driver"
 -			url="jdbc:postgresql://localhost:${pe.db.port}/postgres"
 +			url="jdbc:postgresql://localhost:${pe.db.port}/${db.name}"
- 			user="pega"
- 			pw="pega"
+ 			user="postgres"
+ 			pw="postgres"
  			query="select current_database()"
-@@ -188,22 +270,159 @@
+@@ -190,27 +259,159 @@
  		<echo message="Loading database with PRPC..."/>
  		
  		<!-- Call pg_restore to restore the dump, number of processors determines the number of processes used for this task -->
--		<PGRESTORE processes="${num.processors}" dumpfile="${user.dir}\data\sqlj.dump"/>
--		<PGRESTORE processes="${num.processors}"/>
+-		<PGRESTORE processes="${num.processors}" dumpfile="${user.dir}\data\sqlj.dump" failOnError="false"/>
 +		<property name="data.restore.dir" value="${user.dir}${file.separator}data" />
 +		<PGRESTORE processes="${num.processors}" dumpfile="${data.restore.dir}${file.separator}sqlj.dump" failOnError="false"/>
-+		<PGRESTORE processes="${num.processors}" failOnError="false"/>
-+
+ 		<PGRESTORE processes="${num.processors}" failOnError="false"/>
+ 		
+ 		<!-- Hack to fix UDFs  -->
+-		<PSQL binDir="${postgres.install.dir}\bin" flag="-f" command="${install.path}\scripts\fixSqljSchema.sql"/>
++		<PSQL binDir="${postgres.install.dir}${file.separator}bin" flag="-f" command="${install.path}${file.separator}scripts${file.separator}fixSqljSchema.sql"/>
+ 		
+-		<PGCTL command="stop" binDir="${postgres.install.dir}\bin" dataDir="${postgres.install.dir}\data"/>
 + 		<echo message="Reindexing postgres database..." />
 +		<PSQL binDir="${postgres.install.dir}${file.separator}bin" command="REINDEX DATABASE ${db.name};"/>
++
++		<PGCTL command="stop" binDir="${postgres.install.dir}${file.separator}bin" dataDir="${postgres.data.dir}"/>
  	</target>
  	
  	<target name="Assign Ports">
@@ -722,16 +707,15 @@ echo "Ready for empathetic digital transformation !!!"
 +export PGDATA=@PGDATA
 +export PLJAVAJAR=`find $${PGBASEPATH}/share -name pljava\*.jar 2>/dev/null | grep -v api | grep -v examples`
 +export PATH="$${PATH}$${PATH+:}$${PGBASEPATH}/bin"
-+export PGDATABASE=@DB_NAME
-+export PGUSER=pega
-+export PGPASSWORD=pega
++export PGDATABASE=postgres
++export PGUSER=postgres
++export PGPASSWORD=postgres
 +export PGPORT=@PG_PORT
 +#export PGLOCALEDIR=$${PGBASEPATH}/share/locale
 +[ ! "Z$${PLJAVAJAR}" = "Z" ] &amp;&amp; [ -f $${PLJAVAJAR} ] &amp;&amp; export CLASSPATH=$${CLASSPATH}$${CLASSPATH+:}$${PLJAVAJAR}
 +		</echo>
 +		<replace summary="true" file="${install.path}${file.separator}scripts${file.separator}pg_env.sh" token="@PGDATA" value="${postgres.data.dir}" />
 +		<replace summary="true" file="${install.path}${file.separator}scripts${file.separator}pg_env.sh" token="@PG_PORT" value="${pe.db.port}" />
-+		<replace summary="true" file="${install.path}${file.separator}scripts${file.separator}pg_env.sh" token="@DB_NAME" value="${db.name}" />
 +
 +		<!-- Tomcat/Postgres Bash Startup -->
 +		<echo file="${install.path}${file.separator}scripts${file.separator}startup.sh">#!/bin/sh
@@ -747,11 +731,7 @@ echo "Ready for empathetic digital transformation !!!"
 +
 +# Start tomcat - continue after success - needs log line after "Server startup in"
 +export CATALINA_HOME=@CATALINA_HOME
-+# Ensure DB connection schema is correct
-+sed -e 's/\(jdbc:postgresql:\/\/localhost:[0-9]*\/\)\(.*\)\"/\1'$${PGDATABASE}'\"/g' -i.bk $${CATALINA_HOME}/conf/context.xml
-+echo "JRE_HOME=$${JAVA_HOME}" > $${CATALINA_HOME}/bin/setenv.sh
-+echo "JAVA_OPTS=-Xms1024m -Xmx4096m -XX:PermSize=64m -XX:MaxPermSize=384m"  >> $${CATALINA_HOME}/bin/setenv.sh
-+chmod 755 "$${CATALINA_HOME}/bin/catalina.sh" "$${CATALINA_HOME}/bin/setenv.sh"
++chmod 755 "$${CATALINA_HOME}/bin/catalina.sh"
 +sh "$${CATALINA_HOME}/bin/startup.sh"
 +( tail -f -n0 $${CATALINA_HOME}/logs/catalina.out &amp; ) | grep -q "Server startup in "
 +
@@ -832,7 +812,7 @@ echo "Ready for empathetic digital transformation !!!"
  		<!-- Tomcat/Postgres Startup Shortcut -->
  		<echo file="CreatePegaShortCut.vbs">
  			Set Shell = CreateObject("WScript.Shell")
-@@ -212,15 +431,15 @@
+@@ -219,15 +420,15 @@
  			' link.Arguments = "1 2 3"   'Arguments for shortcut executable
  			link.Description = "Start PRPC ${prpc.version}"
  			'  Fully qualified path (normally the executable) and an index associated with the icon 
@@ -852,7 +832,7 @@ echo "Ready for empathetic digital transformation !!!"
  			<arg value="CreatePegaShortCut.vbs" />
  		</exec>
  
-@@ -234,15 +453,15 @@
+@@ -241,15 +442,15 @@
  			' link.Arguments = "1 2 3"   'Arguments for shortcut executable
  			link.Description = "Stop PRPC ${prpc.version}"
  			'  Fully qualified path (normally the executable) and an index associated with the icon 
@@ -872,13 +852,13 @@ echo "Ready for empathetic digital transformation !!!"
  			<arg value="CreatePegaShortCut.vbs" />
  		</exec>
  
-@@ -254,11 +473,12 @@
+@@ -261,12 +462,12 @@
  			strDesktopPath = WshShell.SpecialFolders("Desktop")
  			Set objShortcutUrl = WshShell.CreateShortcut(strDesktopPath &amp; "\PRPC ${prpc.version} Login.lnk")
  			objShortcutUrl.TargetPath = "http://localhost:${pe.tomcat.port}/prweb/PRServlet"
 -			objShortcutUrl.IconLocation = "${install.path}\scripts\pega.ico,0"
 +			objShortcutUrl.IconLocation = "${install.path}${file.separator}scripts${file.separator}pega.ico,0"
-+			objShortcutUrl.Description = "Log in to PRPC ${prpc.version}"
+ 			objShortcutUrl.Description = "Log in to PRPC ${prpc.version}"
  			objShortcutUrl.Save 
  		</echo>
  
@@ -887,20 +867,20 @@ echo "Ready for empathetic digital transformation !!!"
  			<arg value="CreatePegaShortCut.vbs" />
  		</exec>
  
-@@ -268,15 +488,21 @@
+@@ -276,15 +477,20 @@
  
  	<target name="PRPC Launching">
  		
 -		<property name="tomcat.home" value="${install.path}/tomcat"/>
 -		<property name="antRunAsync" value="ant_async/bin/antRunAsync.bat"/>
 +		<property name="tomcat.home" value="${install.path}${file.separator}tomcat"/>
-+		<property name="antRunAsync" value="ant_async${file.separator}bin${file.separator}antRunAsync.bat"/>
++		<property name="antRunAsync" value="${basedir}${file.separator}ant_async${file.separator}bin${file.separator}antRunAsync"/>
  		<echo message="Starting tomcat .... "/>
  		
  		<!-- start up tomcat asynchronously -->
--		<exec dir="${tomcat.home}/bin/" executable="${basedir}/${antRunAsync}"
-+		<exec osfamily="windows" dir="${tomcat.home}${file.separator}bin${file.separator}" executable="${basedir}${file.separator}${antRunAsync}"
- 			   vmlauncher="false" failonerror="true">
+-		<exec dir="${install.path}/scripts/" executable="${basedir}/${antRunAsync}"
+-			   vmlauncher="false" failonerror="true">
++		<exec osfamily="windows" dir="${install.path}${file.separator}scripts${file.separator}" executable="${antRunAsync}" vmlauncher="false" failonerror="true">
  			<arg value="startup" />
  		</exec>
 +
@@ -912,13 +892,17 @@ echo "Ready for empathetic digital transformation !!!"
  		
  		<echo message="Waiting for tomcat to start..."/>
  		
---- antinstall-config.xml	2015-06-04 07:33:10.000000000 -0400
-+++ antinstall-config-nitro.xml	2019-11-28 19:00:00.409500048 -0500
-@@ -45,12 +45,14 @@
+--- antinstall-config.xml	2019-11-26 18:13:35.001081434 -0500
++++ antinstall-config-nitro.xml	2019-11-27 09:10:49.206084662 -0500
+@@ -43,14 +43,16 @@
+ 	<page
+ 			type="splash"
  			name="PE-Overview"
- 			displayText="PegaRULES Process Commander 718 Personal Edition - Installation"
- 			splashResource="/resources/pega-grey-large.png"/>
-+			altText="PegaRULES Process Commander 718 Personal Edition - Installation - updated by pega_pe_nitro project"/>
+-			displayText="PegaRULES Process Commander 7.2.2 Personal Edition - Installation"
+-			splashResource="/resources/pega-grey-large.png"/>
++			displayText="PegaRULES Process Commander 7.2.2 Personal Edition - Installation - updated by pega_pe_nitro project"
++			splashResource="/resources/pega-grey-large.png"
++			altText="PegaRULES Process Commander 7.2.2 Personal Edition - Installation - updated by pega_pe_nitro project"/>
  			
  	<page
  			type="text"
