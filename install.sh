@@ -181,7 +181,11 @@ function preppostgresql {
 
 function show_help
 {
-    CORP_GROUPS=`getent group | grep \:60 | grep -v \  | cut -f 1 -d ':' | sed -e 's/\(.*\)/                           \1/g'`
+    if [ "$OSTYPE" = "Linux" ] ; then
+        CORP_GROUPS=`getent group | grep \:60 | grep -v \  | cut -f 1 -d ':' | sed -e 's/\(.*\)/                           \1/g'`
+    else
+        CORP_GROUPS=`dscl . list /Groups | grep -v '_'`
+    fi
     printf "Usage: $0 <options> <pega_pe_install_file>
 Options are as follows:
  Mandatory:
@@ -276,7 +280,7 @@ if [ "$PE_UID" = "root" ] ; then
     echo "Specify user with -U - user will be created if one does not exist"
     exit 2
 else
-    getent passwd $PE_UID > /dev/null 2>&1
+    [ ! "$OSTYPE" = "Linux" ] || getent passwd $PE_UID > /dev/null 2>&1
     if [ $? -gt 0 ] ; then
 	read -s -p "Specified user ${PE_UID} does not exist. Create user (Y/N) ?" NEW_USER
 	if [ "${NEW_USER}" = "Y" ] ; then
